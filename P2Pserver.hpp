@@ -50,6 +50,28 @@ public:
         return true;
     }
     //文件数据获取
+    static bool RangeParse(std::string &range, int64_t &start,int64_t &len){
+        size_t pos1=range.find("=");
+        size_t pos2=range.find("-");
+            if(pos1==std::string::npos||
+               pos2== std::string::npos){
+                return false;
+            }
+        std::string range_start;
+        std::string range_end;
+        range_start=range.substr(pos1+1,pos2-pos1-1);
+        range_end=range.substr(pos2+1);
+
+        int64_t end;
+        std::stringstream tmp;
+        tmp<<range_start;
+        tmp>>start;
+        tmp.clear();
+        tmp<<range_end;
+        tmp>>end;
+        len=end-start+1;
+        return true;
+    }
     static void GetFileData(const httplib::Request &req,httplib::Response &rsp){
         std::string realpath=ROOT_PATH+req.path;//文件地址
         if(!bf::exists(realpath)){//判断文件地址是否存在
@@ -63,17 +85,26 @@ public:
             rsp.status=200;
             return ;
         }
+        std::string range;
+        range=req.get_header_value("Range");
+        //range   :bytes=0-299;
+        int64_t start,len;
+        RangeParse(range,start,len);
+
         std::ifstream file(realpath,std::ios::binary);
         if(!file.is_open()){//判断文件是否打开
             rsp.status=500;
             return ;
         }
         //进行文件定位，获取读取文件数据长度
-        file.seekg(0,file.end);
-        int length=file.tellg();
-        //文件指针定位，读取相应长度的数据
-        file.seekg(0,file.beg);
-        file.read(&rsp.body[0],length);
+        //file.seekg(0,file.end);
+        //int length=file.tellg();
+        ////文件指针定位，读取相应长度的数据
+        //file.seekg(0,file.beg);
+        //file.read(&rsp.body[0],length);
+        file.seekg(start,std::ios::beg);
+        rsp.body.resize(len);
+        file.read(&rsp.body[0],len);
         if(!file.good())
         {
             rsp.status=500;

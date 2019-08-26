@@ -182,41 +182,123 @@ public:
         DownLoadFile(_file_list[_file_idx]);
         return true;
     }
-    //下载文件
-    bool DownLoadFile(std::string &filename){
-        int64_t fsize=0;
-        std::string host=_host_list.GetHostById(_host_idx);//选定的主机
-        httplib::Client client(host.c_str(),9000);
-        auto rsp=client.Head(filename.c_str());//选择的文件名
-        //返回的状态信息无异常，从正文中获取文件数据
-        if(rsp&&rsp->status==200){
-           // std::string len;
-           // len=rsp->get_header_value("Content-Length");
-           // std::stringstream tmp;
-           // tmp<<len;
-           // tmp>>fsize;
-            boost::filesystem::path path(filename);
-                 std::string file=path.filename().string();
-                 std::string realpath=_download_path+file;
-                 std::fstream fs(realpath,std::ios::binary|std::ios::out);
-                 if(!fs.is_open()){
-                     std::cerr<<"open file["<<realpath<<"] failed\n";
-                     return false;
-                 }
-                 fs.seekp(0,std::ios::beg);
-                 fs.write(&rsp->body[0],rsp->body.size());
-                 if(!fs.good()){
-                     std::cerr<<"write file:["<<realpath<<"] failed\n";
-                     return false;
-                 }
-                fs.close();
+    //下载文件--整个文件下载
+   // bool DownLoadFile(std::string &filename){
+   //     int64_t fsize=0;
+   //     std::string host=_host_list.GetHostById(_host_idx);//选定的主机
+   //     httplib::Client client(host.c_str(),9000);
+   //     auto rsp=client.Head(filename.c_str());//选择的文件名
+   //     //返回的状态信息无异常，从正文中获取文件数据
+   //     if(rsp&&rsp->status==200){
+   //        // std::string len;
+   //        // len=rsp->get_header_value("Content-Length");
+   //        // std::stringstream tmp;
+   //        // tmp<<len;
+   //        // tmp>>fsize;
+   //         boost::filesystem::path path(filename);
+   //              std::string file=path.filename().string();
+   //              std::string realpath=_download_path+file;
+   //              std::fstream fs(realpath,std::ios::binary|std::ios::out);
+   //              if(!fs.is_open()){
+   //                  std::cerr<<"open file["<<realpath<<"] failed\n";
+   //                  return false;
+   //              }
+   //              fs.seekp(0,std::ios::beg);
+   //              fs.write(&rsp->body[0],rsp->body.size());
+   //              if(!fs.good()){
+   //                  std::cerr<<"write file:["<<realpath<<"] failed\n";
+   //                  return false;
+   //              }
+   //             fs.close();
+   //   }
+   //     else{
+   //         std::cerr<<"download file failed!\n";
+   //         return false;
+   //     }
+   //     return true;
+   // }
+   // 下载文件--分块下载
+    bool DownLoadFile(std::string &filename) {
+        int64_t fsize = 0;
+        std::string host = _host_list.GetHostById(_host_idx);
+        httplib::Client client(host.c_str(), 9000);
+        auto rsp = client.Head(filename.c_str());
+        if (rsp && rsp->status == 200) {
+            std::string len;
+            len = rsp->get_header_value("Content-Length");
+            std::stringstream tmp;
+            tmp << len;
+            tmp >> fsize;
+
         }
-        else{
-            std::cerr<<"download file failed!\n";
-            return false;
+        int64_t range_size = 1024;
+        int count = fsize / range_size;
+        //2049 / 1024 = 2   0,      1,          2  
+        //            //0~2048:           0~1023  1024~2047   2048~2048
+        for (int i = 0 ; i <= count; i++) {
+            int64_t range_start = i * range_size;
+            int64_t range_end = ((i+1) * range_size) - 1;
+            if (i == count) {
+                range_end = fsize - 1;
+            }
+            int64_t range_len = range_end - range_start + 1;
+        //采用进程来进行分块下载--线程的常规用法无法直接传送多个参数
+            int pid = fork();
+            if (pid == 0) {
+                RangeFileDownLoad(host, filename, range_start,
+                                  range_len);
+                exit(0);
+            }
         }
+        for (int i = 0; i <= count; i++) {
+            wait(NULL);
+        }
+        std::cerr << "file "<<filename<<" download success\n";
         return true;
     }
+
+    bool RangeFileDownLoad(std::string &host, 
+                           std::string &name, int64_t start, int64_t len) {
+        httplib::Headers hdrs;
+        int64_t range_start = start;
+        int64_t range_end = len + start - 1;
+        int64_t range_len = len;
+        std::stringstream tmp;
+        tmp << "bytes="<<range_start<<"-"<<range_end;
+        std::string range = tmp.str();
+        hdrs.insert(std::make_pair("Range",range.c_str()));
+        httplib::Client client(host.c_str(), 9000);
+        auto rsp = client.Get(name.c_str(), hdrs);
+        if (rsp && rsp->status == 200) {
+            boost::filesystem::path path(name);
+            std::string file = path.filename().string();
+            std::string realpath = _download_path + file;
+            std::fstream fs(realpath, 
+                            std::ios::binary | std::ios::out);
+            if (!fs.is_open()) {
+                std::cerr << "open file:["<<realpath<<"] failed\n";
+                return false;
+
+            }
+            fs.seekp(range_start, std::ios::beg);
+            fs.write(&rsp->body[0], rsp->body.size());
+            if (!fs.good()) {
+                std::cerr << "write file:["<<realpath<<"] failed\n";
+                return false;
+
+            }
+            fs.close();
+
+        }else {
+            std::cerr << "download file failed!\n";
+            return false;
+
+        }
+
+        return true;
+
+    }
+
     int DoFace() {
         std::cout << "1. 附近主机配对\n";
         std::cout << "2. 显示附近在线主机\n";
@@ -240,7 +322,7 @@ public:
     }
     bool Start(){
         while(1){
-            std::cout<<"abc-------------"<<std::endl;
+            std::cout<<"-------------"<<std::endl;
             int choose=DoFace();
             std::vector<std::string> list;
             switch(choose){
